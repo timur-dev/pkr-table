@@ -3,7 +3,6 @@
   "name": "spin-go-poker",
   "version": "1.0.0",
   "private": true,
-  "homepage": "https://timur-dev.github.io/pkr-table",
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
