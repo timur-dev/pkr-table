@@ -347,24 +347,47 @@ export default function App(){
     return ()=>clearTimeout(tmr.current);
   },[gs?.turnId]);
 
-  // ── ALL-IN RUNOUT ─────────────────────────────────────────────────────────
-  // Fires on every turnId change. If nobody can act, advance one street at a
-  // time so React renders each step (flop → turn → river → showdown).
+  // ── ALL-IN RUNOUT — card-by-card reveal ──────────────────────────────────
   useEffect(()=>{
     if(!gs||gs.showdown) return;
-    const canAct=gs.players.filter(p=>!p.folded&&!p.busted&&!p.allIn);
-    const allInRunout=gs.needToAct.size===0&&canAct.length===0;
-    if(!allInRunout) return;
-    const nextStreetName={preflop:'Flop',flop:'Turn',turn:'River',river:'Showdown'};
-    const delay=gs.street==='preflop'?700:1100;
-    addLog(`⚡ All-in — dealing ${nextStreetName[gs.street]||''}…`);
-    tmr.current=setTimeout(()=>setGs(prev=>{
-      // guard: don't advance if somehow already at showdown
-      if(prev.showdown) return prev;
-      return advStreet(prev);
-    }),delay);
-    return ()=>clearTimeout(tmr.current);
-  },[gs?.turnId]);
+    const active=gs.players.filter(p=>!p.folded&&!p.busted);
+    const canAct=active.filter(p=>!p.allIn&&p.stack>0);
+    const isRunout=gs.needToAct.size===0&&canAct.length===0&&active.length>1;
+    if(!isRunout) return;
+
+    // Step 1 — flip all hole cards face-up, then pause before first card
+    if(!gs.allInReveal){
+      tmr.current=setTimeout(()=>{
+        addLog('⚡ All-in — cards face up!');
+        setGs(prev=>({...prev,allInReveal:true,visibleComm:prev.community.length,turnId:(prev.turnId||0)+1}));
+      },500);
+      return ()=>clearTimeout(tmr.current);
+    }
+
+    // Step 2 — reveal one community card at a time
+    if(gs.visibleComm<5){
+      const cardNames=['','','Flop 1','Flop 2','Flop 3','Turn','River'];
+      const delay=gs.visibleComm===gs.community.length?1000:750; // 1s pause, then 0.75s each
+      addLog(`Dealing card ${gs.visibleComm+1}…`);
+      tmr.current=setTimeout(()=>{
+        setGs(prev=>{
+          if(prev.showdown) return prev;
+          const next=prev.visibleComm+1;
+          if(next>=5) return resolveHand({...prev,community:prev.comm5,visibleComm:5,showdown:true},true);
+          return {...prev,visibleComm:next,turnId:(prev.turnId||0)+1};
+        });
+      },delay);
+      return ()=>clearTimeout(tmr.current);
+    }
+
+    // Step 3 — all 5 cards visible, resolve if not yet done
+    if(!gs.showdown){
+      tmr.current=setTimeout(()=>{
+        setGs(prev=>resolveHand({...prev,community:prev.comm5,showdown:true},true));
+      },600);
+      return ()=>clearTimeout(tmr.current);
+    }
+  },[gs?.turnId,gs?.allInReveal,gs?.visibleComm]);
 
   // ── GAME OVER CHECK ────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -410,7 +433,9 @@ export default function App(){
   const toCall=h&&gs?Math.min(Math.max(0,gs.currentBet-h.bet),h.stack):0;
   const canCheck=h&&gs&&gs.currentBet<=h.bet;
   const minRA=gs&&h?Math.min(gs.currentBet+gs.minRaise,h.stack+h.bet):100;
-  const canRaise=h&&gs&&h.stack>toCall&&(h.stack+h.bet)>gs.currentBet;
+  // Raise is only valid if at least one opponent can still respond to it
+  const hasLiveOpp=gs&&gs.players.some(p=>!p.isHero&&!p.folded&&!p.busted&&!p.allIn&&p.stack>0);
+  const canRaise=h&&gs&&h.stack>toCall&&(h.stack+h.bet)>gs.currentBet&&hasLiveOpp;
   const hasSidePot=gs&&calcPots(gs.players).length>1;
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -584,18 +609,21 @@ export default function App(){
 
       {/* AI players */}
       <div style={{display:'flex',gap:8,padding:'10px 10px 0'}}>
-        <PPanel p={p1} isAct={!gs.showdown&&gs.actingIdx===1&&!p1.folded&&!p1.busted} isDealer={gs.dealerIdx===1} showCards={gs.showdown&&!p1.busted} isWinner={gs.winnerIds.includes(1)} won={gs.potWins?.[1]} showdown={gs.showdown} handName={gs.handNames[1]}/>
-        <PPanel p={p2} isAct={!gs.showdown&&gs.actingIdx===2&&!p2.folded&&!p2.busted} isDealer={gs.dealerIdx===2} showCards={gs.showdown&&!p2.busted} isWinner={gs.winnerIds.includes(2)} won={gs.potWins?.[2]} showdown={gs.showdown} handName={gs.handNames[2]}/>
+        <PPanel p={p1} isAct={!gs.showdown&&gs.actingIdx===1&&!p1.folded&&!p1.busted} isDealer={gs.dealerIdx===1} showCards={(gs.showdown||gs.allInReveal)&&!p1.busted&&!p1.folded} isWinner={gs.winnerIds.includes(1)} won={gs.potWins?.[1]} showdown={gs.showdown} handName={gs.handNames[1]}/>
+        <PPanel p={p2} isAct={!gs.showdown&&gs.actingIdx===2&&!p2.folded&&!p2.busted} isDealer={gs.dealerIdx===2} showCards={(gs.showdown||gs.allInReveal)&&!p2.busted&&!p2.folded} isWinner={gs.winnerIds.includes(2)} won={gs.potWins?.[2]} showdown={gs.showdown} handName={gs.handNames[2]}/>
       </div>
 
       {/* Felt */}
       <div style={{margin:'10px',background:'radial-gradient(ellipse at 50% 40%,#175f2d 0%,#0b3f1d 55%,#061e0c 100%)',borderRadius:28,border:'7px solid #4a2900',outline:'2px solid #7a4d00',padding:'16px 10px 14px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,boxShadow:'inset 0 0 60px rgba(0,0,0,.8)',flexShrink:0}}>
         <div style={{display:'flex',gap:5}}>
-          {[0,1,2,3,4].map(i=>(
-            gs.community[i]
-              ?<div key={i} style={{animation:'dealCard .35s ease'}}><Card card={gs.community[i]} faceDown={false}/></div>
-              :<div key={i} style={{width:50,height:72,borderRadius:8,border:'1.5px dashed rgba(255,255,255,.08)',background:'rgba(0,0,0,.1)'}}/>
-          ))}
+          {[0,1,2,3,4].map(i=>{
+            // During all-in reveal, use visibleComm counter; otherwise use community array
+            const card=gs.allInReveal?gs.comm5[i]:gs.community[i];
+            const show=gs.allInReveal?i<gs.visibleComm:!!gs.community[i];
+            return show
+              ?<div key={i} style={{animation:'dealCard .4s ease'}}><Card card={card} faceDown={false}/></div>
+              :<div key={i} style={{width:50,height:72,borderRadius:8,border:'1.5px dashed rgba(255,255,255,.08)',background:'rgba(0,0,0,.1)'}}/>;
+          })}
         </div>
         <div style={{background:'rgba(0,0,0,.6)',border:'1px solid rgba(245,200,66,.3)',borderRadius:20,padding:'5px 20px',color:'#f5c842',fontSize:15,fontWeight:'bold',minHeight:30,display:'flex',alignItems:'center'}}>
           {gs.pot>0?`💰 POT: ${gs.pot}`:gs.showdown?'✓ Pot Resolved':'—'}
