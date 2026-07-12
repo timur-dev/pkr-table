@@ -155,9 +155,13 @@ const advStreet = gs => {
   let fa=(gs.dealerIdx+1)%3;
   for(let i=0;i<3;i++){const idx=(gs.dealerIdx+1+i)%3;if(!ps[idx].folded&&!ps[idx].busted){fa=idx;break;}}
   const canAct=ps.filter(p=>!p.folded&&!p.busted&&!p.allIn);
-  const newGs={...gs,players:ps,community:comm,street:nxt,currentBet:0,minRaise:BB_A,actingIdx:fa,needToAct:new Set(canAct.map(p=>p.id)),turnId:(gs.turnId||0)+1,debugLog:[...(gs.debugLog||[]),`→ Street: ${nxt}`].slice(-10)};
-  if(canAct.length===0) return advStreet(newGs);
-  return newGs;
+  // Never recurse — return one step at a time so React commits each street
+  // to state. The auto-advance useEffect drives the rest with visual delays.
+  return {...gs,players:ps,community:comm,street:nxt,currentBet:0,minRaise:BB_A,actingIdx:fa,
+    needToAct:new Set(canAct.map(p=>p.id)),
+    turnId:(gs.turnId||0)+1,
+    debugLog:[...(gs.debugLog||[]),`→ Street: ${nxt}`].slice(-10),
+  };
 };
 
 const resolveHand = (gs,sd) => {
@@ -343,16 +347,24 @@ export default function App(){
     return ()=>clearTimeout(tmr.current);
   },[gs?.turnId]);
 
-  // ── ALL-IN RUNOUT ──────────────────────────────────────────────────────────
+  // ── ALL-IN RUNOUT ─────────────────────────────────────────────────────────
+  // Fires on every turnId change. If nobody can act, advance one street at a
+  // time so React renders each step (flop → turn → river → showdown).
   useEffect(()=>{
-    if(!gs||gs.showdown||gs.needToAct.size>0) return;
+    if(!gs||gs.showdown) return;
     const canAct=gs.players.filter(p=>!p.folded&&!p.busted&&!p.allIn);
-    if(canAct.length===0){
-      addLog('All-in — running it out…');
-      tmr.current=setTimeout(()=>setGs(prev=>advStreet(prev)),800);
-      return ()=>clearTimeout(tmr.current);
-    }
-  },[gs?.turnId,gs?.needToAct?.size]);
+    const allInRunout=gs.needToAct.size===0&&canAct.length===0;
+    if(!allInRunout) return;
+    const nextStreetName={preflop:'Flop',flop:'Turn',turn:'River',river:'Showdown'};
+    const delay=gs.street==='preflop'?700:1100;
+    addLog(`⚡ All-in — dealing ${nextStreetName[gs.street]||''}…`);
+    tmr.current=setTimeout(()=>setGs(prev=>{
+      // guard: don't advance if somehow already at showdown
+      if(prev.showdown) return prev;
+      return advStreet(prev);
+    }),delay);
+    return ()=>clearTimeout(tmr.current);
+  },[gs?.turnId]);
 
   // ── GAME OVER CHECK ────────────────────────────────────────────────────────
   useEffect(()=>{
